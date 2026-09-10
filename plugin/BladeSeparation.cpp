@@ -224,6 +224,8 @@ namespace BladeSeparation
 	static void* g_getWeaponSkillAVOriginal = nullptr;
 	static void* g_calcWeaponDamageOriginal = nullptr;
 	static void* g_calcPowerAttackBonusOriginal = nullptr;
+	static UInt32 g_combatControllerWeaponSkillChainTarget = 0;
+	static UInt32 g_combatSelectionHandToHandChainTarget = 0;
 	static bool g_hooksInstalled = false;
 	static bool g_hookInstallAttempted = false;
 
@@ -742,23 +744,32 @@ namespace BladeSeparation
 		return actor->GetActorValue(actorValue);
 	}
 
-	static UInt32 __cdecl GetCombatScoringWeaponSkillLevel(Actor* actor, TESObjectWEAP* weapon)
+	// Sentinel meaning "this weapon/actorValue isn't ours" so the naked hook can defer
+	// to a chained mod's hook (if any) instead of assuming sole ownership of the patch site.
+	static constexpr UInt32 kNotOurWeaponSkill = 0xFFFFFFFF;
+
+	static UInt32 __cdecl TryGetOwnCombatScoringWeaponSkillLevel(Actor* actor, TESObjectWEAP* weapon)
 	{
 		const UInt32 nativeActorValue = NativeWeaponSkillAV(weapon);
 		UInt32 sidecarLevel = 0;
 		if (TryGetPlayerWeaponSidecarLevelForWeapon(actor, weapon, nativeActorValue, &sidecarLevel))
 			return sidecarLevel;
 
-		return GetCurrentActorValue(actor, nativeActorValue);
+		return kNotOurWeaponSkill;
 	}
 
-	static UInt32 __cdecl GetCombatSelectionActorValueSkill(Actor* actor, UInt32 actorValue)
+	static UInt32 __cdecl GetNativeCombatScoringWeaponSkillLevel(Actor* actor, TESObjectWEAP* weapon)
+	{
+		return GetCurrentActorValue(actor, NativeWeaponSkillAV(weapon));
+	}
+
+	static UInt32 __cdecl TryGetOwnCombatSelectionActorValueSkill(Actor* actor, UInt32 actorValue)
 	{
 		UInt32 sidecarLevel = 0;
 		if (TryGetPlayerWeaponSidecarLevel(actor, actorValue, nullptr, &sidecarLevel))
 			return sidecarLevel;
 
-		return GetCurrentActorValue(actor, actorValue);
+		return kNotOurWeaponSkill;
 	}
 
 	static __declspec(naked) void HookCombatControllerWeaponSkillLevel()
@@ -766,11 +777,29 @@ namespace BladeSeparation
 		__asm
 		{
 			push ecx
+			push ecx
 			push ebx
-			call GetCombatScoringWeaponSkillLevel
+			call TryGetOwnCombatScoringWeaponSkillLevel
 			add esp, 8
+			cmp eax, 0FFFFFFFFh
+			je notMine
+			add esp, 4
 			mov edx, kCombatControllerWeaponSkillContinue
 			jmp edx
+			notMine :
+			mov edx, dword ptr[g_combatControllerWeaponSkillChainTarget]
+				test edx, edx
+				jz noChain
+				pop ecx
+				jmp edx
+				noChain :
+			pop ecx
+				push ecx
+				push ebx
+				call GetNativeCombatScoringWeaponSkillLevel
+				add esp, 8
+				mov edx, kCombatControllerWeaponSkillContinue
+				jmp edx
 		}
 	}
 
@@ -780,19 +809,35 @@ namespace BladeSeparation
 		{
 			push ebx
 			push esi
-			call GetCombatSelectionActorValueSkill
+			call TryGetOwnCombatSelectionActorValueSkill
 			add esp, 8
+			cmp eax, 0FFFFFFFFh
+			je notMine
 			mov ebx, eax
-			mov edx, [esi]
-			mov eax, [edx + 284h]
-			push 11h
-			mov ecx, esi
-			call eax
-			cmp eax, ebx
-			jle keepCandidate
-			mov edx, kCombatSelectionHandToHandPreferred
+			jmp doCompare
+			notMine :
+			mov edx, dword ptr[g_combatSelectionHandToHandChainTarget]
+				test edx, edx
+				jnz haveChain
+				push ebx
+				push esi
+				call GetCurrentActorValue
+				add esp, 8
+				mov ebx, eax
+				jmp doCompare
+				haveChain :
 			jmp edx
-			keepCandidate :
+				doCompare :
+			mov edx, [esi]
+				mov eax, [edx + 284h]
+				push 11h
+				mov ecx, esi
+				call eax
+				cmp eax, ebx
+				jle keepCandidate
+				mov edx, kCombatSelectionHandToHandPreferred
+				jmp edx
+				keepCandidate :
 			mov edx, kCombatSelectionHandToHandCompareContinue
 				jmp edx
 		}
@@ -961,9 +1006,6 @@ namespace BladeSeparation
 
 	static bool AddWeaponProgress(BladeSeparationShared::WeaponSkillKind kind, UInt32 useType, float baseDelta)
 	{
-		// Long Blade is not a tracked sidecar skill: it is the native Blade AV, relabeled.
-		// Explicitly decline it here so the caller falls through to the native
-		// Player_ModExperience trampoline (which still reaches xSkills' own mid-function hook).
 		if (kind == BladeSeparationShared::kWeaponSkill_Long)
 			return false;
 
@@ -1003,8 +1045,15 @@ namespace BladeSeparation
 		if (player == GetPlayer() && (actorValue == kActorVal_Blade || actorValue == kActorVal_Blunt))
 		{
 			const BladeSeparationShared::WeaponSkillKind kind = ClassifySidecarWeapon(GetPlayerEquippedWeapon());
-			if (SkillConditionAllowsProgress(kind, actorValue, useType) &&
-				AddWeaponProgress(kind, useType, baseDelta))
+			_MESSAGE("BladeSeparation: HookPlayerModExperience actorValue=%08X useType=%u baseDelta=%.4f classifiedKind=%d",
+				actorValue, useType, baseDelta, static_cast<int>(kind));
+
+			const bool conditionAllows = SkillConditionAllowsProgress(kind, actorValue, useType);
+			if (!conditionAllows)
+				_MESSAGE("BladeSeparation: SkillConditionAllowsProgress=false (kind=%d, actorValue=%08X, useType=%u) -- falling through to original Player_ModExperience",
+					static_cast<int>(kind), actorValue, useType);
+
+			if (conditionAllows && AddWeaponProgress(kind, useType, baseDelta))
 				return;
 		}
 
@@ -1340,7 +1389,33 @@ namespace BladeSeparation
 		return true;
 	}
 
-	static bool WriteRelJumpRaw(const char* name, UInt32 address, UInt32 target, UInt32 patchLength = 5)
+	static bool WriteRelJumpRaw(const char* name, UInt32 address, UInt32 target, UInt32 patchLength = 5);
+
+	// Like WriteRelJumpChecked, but for jmp-replacement patch sites that a *second* mod
+	// using the same convention may legitimately also want to patch (e.g. BladeSeparation
+	// and SpearSkill both replacing the same combat-scoring call site). If bytes at
+	// `address` are already a jmp to something other than our own hookTarget, that's
+	// another mod's hook rather than a corrupted/foreign patch: its target is captured
+	// into chainTarget (read by our naked hook's "not mine" fallback) instead of failing
+	// with a signature mismatch.
+	static bool WriteRelJumpChainable(const char* name, UInt32 address, const UInt8* expected, UInt32 expectedLength, UInt32 hookTarget, UInt32 patchLength, UInt32& chainTarget)
+	{
+		const UInt8* actual = reinterpret_cast<const UInt8*>(address);
+		if (actual[0] == 0xE9)
+		{
+			const UInt32 currentTarget = ReadRelJumpTarget(address);
+			if (currentTarget == hookTarget)
+				return true;
+
+			chainTarget = currentTarget;
+			_MESSAGE("BladeSeparation: chaining existing %s target=%08X", name, currentTarget);
+			return WriteRelJumpRaw(name, address, hookTarget, patchLength);
+		}
+
+		return WriteRelJumpChecked(name, address, expected, expectedLength, hookTarget, patchLength);
+	}
+
+	static bool WriteRelJumpRaw(const char* name, UInt32 address, UInt32 target, UInt32 patchLength)
 	{
 		if (patchLength < 5)
 		{
@@ -1460,19 +1535,21 @@ namespace BladeSeparation
 			sizeof(kTESObjectWEAPGetWeaponSkillAVExpected),
 			g_getWeaponSkillAVOriginal);
 
-		ok &= WriteRelJumpChecked("CombatController weapon skill sidecar scoring",
+		ok &= WriteRelJumpChainable("CombatController weapon skill sidecar scoring",
 			kCombatControllerWeaponSkillCall,
 			kCombatControllerWeaponSkillExpected,
 			sizeof(kCombatControllerWeaponSkillExpected),
 			reinterpret_cast<UInt32>(&HookCombatControllerWeaponSkillLevel),
-			sizeof(kCombatControllerWeaponSkillExpected));
+			sizeof(kCombatControllerWeaponSkillExpected),
+			g_combatControllerWeaponSkillChainTarget);
 
-		ok &= WriteRelJumpChecked("Combat selection weapon skill sidecar scoring",
+		ok &= WriteRelJumpChainable("Combat selection weapon skill sidecar scoring",
 			kCombatSelectionHandToHandComparePatch,
 			kCombatSelectionHandToHandCompareExpected,
 			sizeof(kCombatSelectionHandToHandCompareExpected),
 			reinterpret_cast<UInt32>(&HookCombatSelectionHandToHandSkillCompare),
-			sizeof(kCombatSelectionHandToHandCompareExpected));
+			sizeof(kCombatSelectionHandToHandCompareExpected),
+			g_combatSelectionHandToHandChainTarget);
 
 		if (!g_calcWeaponDamageOriginal)
 			g_calcWeaponDamageOriginal = CreateCalcWeaponDamageGateway();
