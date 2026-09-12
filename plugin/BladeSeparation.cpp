@@ -10,6 +10,7 @@
 #include "..\shared\BladeSeparation.h"
 #include "..\shared\BladeWeaponTypeSidecar.h"
 #include "TrueCustomSkills/TrueCustomSkillsInterface.h"
+#include "OBSEKeywords/KeywordAPI.h"
 
 #include <cmath>
 #include <cstdio>
@@ -675,7 +676,21 @@ namespace BladeSeparation
 		if (TryGetAuthoredWeaponType(weapon, &authoredKind))
 			return authoredKind;
 
-		return BladeSeparationShared::ClassifyWeapon(weapon->type, weapon->GetEditorID(), GetWeaponDisplayName(weapon));
+		if (KeywordAPI::HasKeyword(weapon->refID, "ShortBlade"))
+			return BladeSeparationShared::kWeaponSkill_Short;
+		if (KeywordAPI::HasKeyword(weapon->refID, "Axe"))
+			return BladeSeparationShared::kWeaponSkill_Axe;
+
+		BladeSeparationShared::WeaponSkillKind weapKind = BladeSeparationShared::ClassifyWeapon(weapon->type, weapon->GetEditorID(), GetWeaponDisplayName(weapon));
+
+		if (weapKind == BladeSeparationShared::kWeaponSkill_Short)
+			KeywordAPI::AddKeyword(weapon->refID, "ShortBlade");
+		else if (weapKind == BladeSeparationShared::kWeaponSkill_Axe)
+			KeywordAPI::AddKeyword(weapon->refID, "Axe");
+		else
+			g_weaponTypeStore.SetLoaded(weapon->refID, weapKind);
+
+		return weapKind;
 	}
 
 	static UInt32 GetPlayerWeaponSidecarIndexForActorValueContext(Actor* actor, UInt32 actorValue)
@@ -1045,13 +1060,8 @@ namespace BladeSeparation
 		if (player == GetPlayer() && (actorValue == kActorVal_Blade || actorValue == kActorVal_Blunt))
 		{
 			const BladeSeparationShared::WeaponSkillKind kind = ClassifySidecarWeapon(GetPlayerEquippedWeapon());
-			_MESSAGE("BladeSeparation: HookPlayerModExperience actorValue=%08X useType=%u baseDelta=%.4f classifiedKind=%d",
-				actorValue, useType, baseDelta, static_cast<int>(kind));
 
 			const bool conditionAllows = SkillConditionAllowsProgress(kind, actorValue, useType);
-			if (!conditionAllows)
-				_MESSAGE("BladeSeparation: SkillConditionAllowsProgress=false (kind=%d, actorValue=%08X, useType=%u) -- falling through to original Player_ModExperience",
-					static_cast<int>(kind), actorValue, useType);
 
 			if (conditionAllows && AddWeaponProgress(kind, useType, baseDelta))
 				return;
@@ -1800,6 +1810,14 @@ namespace BladeSeparation
 
 	static void RequestTCSInterfaceOnce();
 
+	static void UnifiedMessageHandler(OBSEMessagingInterface::Message* message)
+	{
+		if (!message)
+			return;
+
+		KeywordAPI::MessageHandler(message);
+	}
+
 	static void MessageHandler(OBSEMessagingInterface::Message* message)
 	{
 		if (!message)
@@ -1829,13 +1847,14 @@ namespace BladeSeparation
 	{
 		if (!obse || !obse->QueryInterface || g_pluginHandle == kPluginHandle_Invalid)
 			return;
-
+		
 		OBSEMessagingInterface* messaging =
 			static_cast<OBSEMessagingInterface*>(obse->QueryInterface(kInterface_Messaging));
-		if (messaging && messaging->RegisterListener)
+		if (messaging)
 		{
 			g_messaging = messaging;
 			messaging->RegisterListener(g_pluginHandle, "OBSE", MessageHandler);
+			messaging->RegisterListener(g_pluginHandle, nullptr, UnifiedMessageHandler);
 		}
 	}
 
@@ -1881,6 +1900,7 @@ extern "C"
 			return false;
 
 		g_pluginHandle = obse->GetPluginHandle();
+		KeywordAPI::Init((OBSEMessagingInterface*)obse->QueryInterface(kInterface_Messaging), g_pluginHandle);
 		BladeSeparation::RegisterSerializationCallbacks();
 		BladeSeparation::RegisterMessaging(obse);
 		return true;
