@@ -17,6 +17,20 @@ jobs:
         with:
           repository: llde/xOBSE
           ref: master
+
+      - name: Checkout EditorIDMapper
+        uses: actions/checkout@v4
+        with:
+          repository: googlepox/EditorIDMapper
+          ref: master
+          path: EditorIDMapper
+
+      - name: Checkout OBSEKeywords
+        uses: actions/checkout@v4
+        with:
+          repository: googlepox/OBSEKeywords
+          ref: master
+          path: OBSEKeywords
           
       - name: Checkout True Custom Skills
         uses: actions/checkout@v4
