@@ -77,13 +77,15 @@ namespace BladeSeparationShared
 			ContainsTokenInsensitive(text, "short sword") ||
 			ContainsTokenInsensitive(text, "knife") ||
 			ContainsTokenInsensitive(text, "tanto") ||
-			ContainsTokenInsensitive(text, "wakizashi");
+			ContainsTokenInsensitive(text, "wakizashi") ||
+			ContainsTokenInsensitive(text, "gladius");
 	}
 
 	inline bool HasAxeToken(const char* text)
 	{
 		return ContainsTokenInsensitive(text, "axe") ||
-			ContainsTokenInsensitive(text, "hatchet");
+			ContainsTokenInsensitive(text, "hatchet") ||
+			ContainsTokenInsensitive(text, "cleaver");
 	}
 
 	inline WeaponSkillKind ClassifyWeapon(unsigned int nativeWeaponType, const char* editorId, const char* displayName)
