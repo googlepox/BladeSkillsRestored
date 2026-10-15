@@ -78,6 +78,8 @@ namespace BladeSeparationShared
 			ContainsTokenInsensitive(text, "knife") ||
 			ContainsTokenInsensitive(text, "tanto") ||
 			ContainsTokenInsensitive(text, "wakizashi") ||
+			ContainsTokenInsensitive(text, "stiletto") ||
+			ContainsTokenInsensitive(text, "kukri") ||
 			ContainsTokenInsensitive(text, "gladius");
 	}
 
