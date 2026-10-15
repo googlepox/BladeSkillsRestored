@@ -651,6 +651,20 @@ namespace BladeSeparation
 			totals.skippedRows);
 	}
 
+	static void ApplyKindKeyword(TESObjectWEAP* weapon, BladeSeparationShared::WeaponSkillKind kind)
+	{
+		if (kind == BladeSeparationShared::kWeaponSkill_Short)
+		{
+			if (!KeywordAPI::HasKeyword(weapon->refID, "ShortBlade"))
+				KeywordAPI::AddKeyword(weapon->refID, "ShortBlade");
+		}
+		else if (kind == BladeSeparationShared::kWeaponSkill_Axe)
+		{
+			if (!KeywordAPI::HasKeyword(weapon->refID, "Axe"))
+				KeywordAPI::AddKeyword(weapon->refID, "Axe");
+		}
+	}
+
 	static bool TryGetAuthoredWeaponType(TESObjectWEAP* weapon, BladeSeparationShared::WeaponSkillKind* outKind)
 	{
 		if (outKind)
@@ -674,7 +688,10 @@ namespace BladeSeparation
 
 		BladeSeparationShared::WeaponSkillKind authoredKind = BladeSeparationShared::kWeaponSkill_None;
 		if (TryGetAuthoredWeaponType(weapon, &authoredKind))
+		{
+			ApplyKindKeyword(weapon, authoredKind);
 			return authoredKind;
+		}
 
 		if (KeywordAPI::HasKeyword(weapon->refID, "ShortBlade"))
 			return BladeSeparationShared::kWeaponSkill_Short;
@@ -683,12 +700,8 @@ namespace BladeSeparation
 
 		BladeSeparationShared::WeaponSkillKind weapKind = BladeSeparationShared::ClassifyWeapon(weapon->type, weapon->GetEditorID(), GetWeaponDisplayName(weapon));
 
-		if (weapKind == BladeSeparationShared::kWeaponSkill_Short)
-			KeywordAPI::AddKeyword(weapon->refID, "ShortBlade");
-		else if (weapKind == BladeSeparationShared::kWeaponSkill_Axe)
-			KeywordAPI::AddKeyword(weapon->refID, "Axe");
-		else
-			g_weaponTypeStore.SetLoaded(weapon->refID, weapKind);
+		ApplyKindKeyword(weapon, weapKind);
+		g_weaponTypeStore.SetLoaded(weapon->refID, weapKind);
 
 		return weapKind;
 	}
